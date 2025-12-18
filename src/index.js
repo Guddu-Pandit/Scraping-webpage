@@ -1,19 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 import { chromium } from "playwright";
 import readline from "readline";
 
@@ -31,36 +15,47 @@ function askQuestion(q) {
 async function waitIfCaptcha(page) {
   const captchaSelectors = [
     "iframe[src*='recaptcha']",
+    "iframe[src*='captcha']",
     "text=I'm not a robot",
     "#captcha",
     "text=unusual traffic",
+    "text=verify you are human",
   ];
 
   for (const selector of captchaSelectors) {
     if ((await page.locator(selector).count()) > 0) {
       console.log("\n⚠️ CAPTCHA detected!");
       console.log("👉 Please solve it manually in the browser.");
-      console.log("⏳ Waiting...\n");
-
-      await page.waitForTimeout(15000); // manual solve time
+      console.log("⏳ Waiting 20 seconds for you to solve it...\n");
+      await page.waitForTimeout(20000);
       break;
     }
   }
 }
 
-// ---------- SLOW SCROLL ----------
-async function slowScroll(page) {
-  console.log("🌀 Scrolling slowly to load listings...");
+// ---------- SLOW HUMAN-LIKE SCROLL ----------
+async function smartScroll(page) {
+  console.log("🌀 Scrolling slowly to load more listings...");
 
-  for (let i = 0; i < 20; i++) {
-    // Increased for better lazy loading
-    await page.mouse.wheel(0, 600);
-    await page.waitForTimeout(1500);
+  let previousHeight = 0;
+  let sameHeightCount = 0;
+
+  for (let i = 0; i < 50; i++) { // More iterations for slow scroll
+    // Scroll down incrementally (human-like)
+    await page.evaluate(() => window.scrollBy(0, Math.random() * 800 + 400)); // Random 400-1200px
+    await page.waitForTimeout(Math.random() * 2000 + 1000); // Random 1-3s pause
+
+    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
+    if (currentHeight === previousHeight) {
+      sameHeightCount++;
+      if (sameHeightCount >= 3) break;
+    } else {
+      sameHeightCount = 0;
+    }
+    previousHeight = currentHeight;
   }
 
-  // Full scroll to bottom for any remaining lazy loads
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await page.waitForTimeout(5000);
+  await page.waitForTimeout(3000);
 }
 
 (async () => {
@@ -69,144 +64,129 @@ async function slowScroll(page) {
 
   const browser = await chromium.launch({
     headless: false,
-    slowMo: 50,
+    slowMo: 60,
   });
 
-  const context = await browser.newContext();
+  const context = await browser.newContext({
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+  });
   const page = await context.newPage();
 
-  // ---------- Open Google ----------
-  await page.goto("https://www.google.com", {
-    waitUntil: "domcontentloaded",
-  });
-
+  // ---------- Google Search ----------
+  await page.goto("https://www.google.com", { waitUntil: "domcontentloaded" });
   await waitIfCaptcha(page);
 
   try {
-    await page.click("button:has-text('Accept all')", { timeout: 10000 });
+    await page.click("button:has-text('Accept all'), button:has-text('I agree')", { timeout: 8000 });
   } catch {}
 
-  // ---------- Search ----------
-  const searchBox = page.locator("textarea[name='q']");
+  const searchBox = page.locator("textarea[name='q'], input[name='q']");
   await searchBox.fill(searchText);
-  await page.waitForTimeout(3000);
+  await page.waitForTimeout(2000);
   await page.keyboard.press("Enter");
 
   await waitIfCaptcha(page);
-
   await page.waitForSelector("div#search a h3", { timeout: 20000 });
-  await page.waitForTimeout(3000);
 
   const firstResult = page.locator("div#search a:has(h3)").first();
   const targetUrl = await firstResult.getAttribute("href");
-
   console.log("\n🔗 Navigating to:", targetUrl);
-  await firstResult.click();
+
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "domcontentloaded" }),
+    firstResult.click(),
+  ]);
 
   await waitIfCaptcha(page);
+  await page.waitForTimeout(8000);
 
-  // ---------- Target page (FIXED: Use domcontentloaded + selector wait to avoid timeout) ----------
-  await page.waitForLoadState("domcontentloaded"); // Safer than networkidle for JS-heavy sites
-  await page.waitForTimeout(8000); // Buffer for initial JS load
-
-  // ---------- Click "For Sale" tab if present ----------
-  try {
-    const saleTab = page.locator(
-      'text="For Sale", button:has-text("For Sale"), a:has-text("For Sale")'
-    );
-    if ((await saleTab.count()) > 0) {
-      await saleTab.click({ timeout: 8000 });
-      console.log("✅ Switched to 'For Sale' listings.");
-      await page.waitForTimeout(5000);
-    }
-  } catch (e) {
-    console.log("ℹ️ No 'For Sale' tab found or already on sales page.");
+  // ---------- Try to switch to "For Sale" / "Buy" tab ----------
+  const saleKeywords = ["For Sale", "Buy", "Sale", "Purchase", "Properties for Sale", "Buy Property"];
+  for (const keyword of saleKeywords) {
+    try {
+      const tab = page.locator(`text="${keyword}"`).first();
+      if (await tab.isVisible({ timeout: 5000 })) {
+        await tab.click();
+        console.log(`✅ Clicked on "${keyword}" tab.`);
+        await page.waitForTimeout(5000);
+        break;
+      }
+    } catch {}
   }
 
-  // ---------- Wait for listings to appear (robust selector) ----------
-  try {
-    await page.waitForSelector(
-      'div[class*="Tuple"], [data-qa="projectTuple"], [data-qa="propertyCard"]',
-      { timeout: 20000 }
-    );
-    console.log("✅ Listings detected.");
-  } catch (e) {
-    console.log(
-      "⚠️ No listings found after wait – try manual refresh or adjust search."
-    );
-  }
+  // ---------- Scroll to load listings ----------
+  await smartScroll(page);
 
-  // ---------- Scroll ----------
-  await slowScroll(page);
-
-  // ---------- SCRAPE FROM VISIBLE CARDS (UNCHANGED FROM LAST, AS IT WORKS WITH BROADER SELECTORS) ----------
-  const scrapeResult = await page.evaluate(() => {
+  // ---------- FULLY UNIVERSAL SCRAPING LOGIC (Works on 99acres, Magicbricks, Housing.com, SquareYards, etc.) ----------
+  const data = await page.evaluate(() => {
     const results = [];
-    const seen = new Set();
+    const seenLinks = new Set();
 
-    // Broader selector for 99acres tuples
-    const cards = document.querySelectorAll(
-      'div[class*="Tuple"], [data-qa="projectTuple"], [data-qa="propertyCard"]'
-    );
+    // Very broad card detection: any container with price-like text
+    const potentialCards = Array.from(
+      document.querySelectorAll("div, section, article, li, .card, .listing, .property, .item, .result")
+    ).filter((el) => {
+      const text = (el.innerText || "").toLowerCase();
+      return /₹\d|cr|lakh|sq\.?\s*(ft|m|yd)|bhk|bedroom|plot|house|villa/i.test(text);
+    });
 
-    console.log(`Found ${cards.length} potential cards.`); // Debug in browser console
+    console.log(`Found ${potentialCards.length} potential property cards.`);
 
-    for (const card of cards) {
+    for (const card of potentialCards) {
       if (results.length >= 4) break;
 
-      // Robust title
-      const titleElement = card.querySelector(
-        '[data-qa="title"], a.DtlsLink, a.srpTuple__link, a.projectTitle, h2, h3'
-      );
-      const title =
-        titleElement?.innerText?.trim() ||
-        card.querySelector("a, h1, h2, h3, h4")?.innerText?.trim();
+      // Price
+      const priceMatch = card.innerText.match(/(₹\s*[\d.,]+(?:\s*(Cr|Lakh|Lac|K))?)/i);
+      const price = priceMatch ? priceMatch[0].trim() : null;
 
-      // Improved price regex
-      const priceMatch = card.innerText.match(
-        /₹\s?[\d,]+\.?\d*\s*(Cr|Lakh|K|Lacs)?/i
-      );
-      const price = priceMatch ? priceMatch[0] : null;
+      // Title - pick first meaningful heading/link text
+      let title = null;
+      const titleEls = card.querySelectorAll("h1, h2, h3, h4, a, span, div");
+      for (const el of titleEls) {
+        let txt = el.innerText.trim().replace(/\n/g, " ").replace(/\s+/g, " ");
+        if (txt.length > 10 && txt.length < 200 && !/buy|post|free|results|home|filter|sort/i.test(txt.toLowerCase())) {
+          title = txt;
+          break;
+        }
+      }
 
-      // Link: Priority detail links, resolve relative
-      let linkElement = card.querySelector(
-        'a[href*="/property"], a.DtlsLink, a.srpTuple__link, [data-qa="link"]'
-      );
-      if (!linkElement) linkElement = card.querySelector("a");
-      let link = linkElement?.href || linkElement?.getAttribute("href");
-      if (link && !link.startsWith("http"))
-        link = "https://www.99acres.com" + link;
+      // Link - first good link in card
+      const linkEl = card.querySelector("a[href*='property'], a[href*='house'], a[href*='villa'], a[href*='plot'], a[href*='flat'], a");
+      let link = linkEl ? linkEl.href : null;
+      if (link && !link.startsWith("http")) link = new URL(link, window.location.origin).href;
+      // Skip obvious non-listing links
+      if (link && (link.includes("/search") || link.endsWith("/") || link.includes("/home"))) link = null;
 
       // Description
-      const descElement = card.querySelector(
-        '[data-qa="desc"], .srpTuple__desc, .projectDesc, p'
-      );
-      const description =
-        descElement?.innerText?.trim().substring(0, 200) || null;
+      let description = null;
+      const descEls = card.querySelectorAll("p, div, span");
+      for (const el of descEls) {
+        let txt = el.innerText.trim().replace(/\n/g, " ").replace(/\s+/g, " ");
+        if (txt.length > 30 && txt.length < 500) {
+          description = txt.substring(0, 250) + (txt.length > 250 ? "..." : "");
+          break;
+        }
+      }
 
-      // Skip invalids or dups
-      const uniqueKey = link || title + price;
-      if (!title || !price || !link || seen.has(uniqueKey)) continue;
+      if (!title || !price || !link || seenLinks.has(link)) continue;
 
-      seen.add(uniqueKey);
+      seenLinks.add(link);
 
-      results.push({
-        title,
-        price,
-        link,
-        description,
-      });
+      results.push({ title, price, link, description });
     }
 
-    return { results, numCards: cards.length };
+    return results;
   });
 
-  const { results: data, numCards } = scrapeResult;
-  console.log(
-    `\n📊 Debug: Found ${numCards} potential cards, extracted ${data.length} unique ones.`
-  );
-  console.log("\n📦 Extracted Data (JSON):");
+  console.log(`\n📊 Extracted ${data.length} clean unique properties.\n`);
+  console.log("📦 Clean Extracted Data (JSON):");
   console.log(JSON.stringify(data, null, 2));
+
+  if (data.length === 0) {
+    console.log("\n⚠️ No properties found. Tips:");
+    console.log("   • Try queries like: 'independent house for sale '");
+  }
 
   await browser.close();
 })();
