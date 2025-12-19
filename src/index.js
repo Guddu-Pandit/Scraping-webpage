@@ -13,49 +13,39 @@ function askQuestion(q) {
 
 // ---------- CAPTCHA HANDLER ----------
 async function waitIfCaptcha(page) {
-  const captchaSelectors = [
-    "iframe[src*='recaptcha']",
-    "iframe[src*='captcha']",
-    "text=I'm not a robot",
-    "#captcha",
-    "text=unusual traffic",
-    "text=verify you are human",
+  const captchaTexts = [
+    "unusual traffic",
+    "verify you are human",
+    "not a robot",
+    "captcha",
   ];
 
-  for (const selector of captchaSelectors) {
-    if ((await page.locator(selector).count()) > 0) {
+  for (const text of captchaTexts) {
+    if ((await page.locator(`text=${text}`).count()) > 0) {
       console.log("\n⚠️ CAPTCHA detected!");
-      console.log("👉 Please solve it manually in the browser.");
-      console.log("⏳ Waiting 20 seconds for you to solve it...\n");
+      console.log("👉 Solve it manually in the browser...");
       await page.waitForTimeout(20000);
       break;
     }
   }
 }
 
-// ---------- SLOW HUMAN-LIKE SCROLL ----------
+// ---------- HUMAN-LIKE SCROLL ----------
 async function smartScroll(page) {
-  console.log("🌀 Scrolling slowly to load more listings...");
+  console.log("🌀 Scrolling to load listings...");
 
-  let previousHeight = 0;
-  let sameHeightCount = 0;
+  let lastHeight = 0;
 
-  for (let i = 0; i < 50; i++) { // More iterations for slow scroll
-    // Scroll down incrementally (human-like)
-    await page.evaluate(() => window.scrollBy(0, Math.random() * 800 + 400)); // Random 400-1200px
-    await page.waitForTimeout(Math.random() * 2000 + 1000); // Random 1-3s pause
+  for (let i = 0; i < 40; i++) {
+    await page.evaluate(() => {
+      window.scrollBy(0, Math.random() * 800 + 400);
+    });
+    await page.waitForTimeout(Math.random() * 2000 + 1000);
 
-    const currentHeight = await page.evaluate(() => document.body.scrollHeight);
-    if (currentHeight === previousHeight) {
-      sameHeightCount++;
-      if (sameHeightCount >= 3) break;
-    } else {
-      sameHeightCount = 0;
-    }
-    previousHeight = currentHeight;
+    const height = await page.evaluate(() => document.body.scrollHeight);
+    if (height === lastHeight) break;
+    lastHeight = height;
   }
-
-  await page.waitForTimeout(3000);
 }
 
 (async () => {
@@ -69,21 +59,22 @@ async function smartScroll(page) {
 
   const context = await browser.newContext({
     userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36",
   });
+
   const page = await context.newPage();
 
-  // ---------- Google Search ----------
+  // ---------- GOOGLE SEARCH ----------
+  console.log("\n🔍 Opening Google...");
   await page.goto("https://www.google.com", { waitUntil: "domcontentloaded" });
   await waitIfCaptcha(page);
 
   try {
-    await page.click("button:has-text('Accept all'), button:has-text('I agree')", { timeout: 8000 });
+    await page.click("button:has-text('Accept all'), button:has-text('I agree')", { timeout: 5000 });
   } catch {}
 
   const searchBox = page.locator("textarea[name='q'], input[name='q']");
   await searchBox.fill(searchText);
-  await page.waitForTimeout(2000);
   await page.keyboard.press("Enter");
 
   await waitIfCaptcha(page);
@@ -91,7 +82,14 @@ async function smartScroll(page) {
 
   const firstResult = page.locator("div#search a:has(h3)").first();
   const targetUrl = await firstResult.getAttribute("href");
-  console.log("\n🔗 Navigating to:", targetUrl);
+
+  if (!targetUrl) {
+    console.log("❌ Could not get first Google result URL");
+    await browser.close();
+    return;
+  }
+
+  console.log("🔗 Navigating to:", targetUrl);
 
   await Promise.all([
     page.waitForNavigation({ waitUntil: "domcontentloaded" }),
@@ -101,91 +99,82 @@ async function smartScroll(page) {
   await waitIfCaptcha(page);
   await page.waitForTimeout(8000);
 
-  // ---------- Try to switch to "For Sale" / "Buy" tab ----------
-  const saleKeywords = ["For Sale", "Buy", "Sale", "Purchase", "Properties for Sale", "Buy Property"];
-  for (const keyword of saleKeywords) {
+  // ---------- OPTIONAL SALE TAB ----------
+  const saleTabs = ["Buy", "For Sale", "Sale", "Properties"];
+  for (const tab of saleTabs) {
     try {
-      const tab = page.locator(`text="${keyword}"`).first();
-      if (await tab.isVisible({ timeout: 5000 })) {
-        await tab.click();
-        console.log(`✅ Clicked on "${keyword}" tab.`);
+      const el = page.locator(`text=${tab}`).first();
+      if (await el.isVisible({ timeout: 3000 })) {
+        await el.click();
+        console.log(`✅ Clicked "${tab}" tab`);
         await page.waitForTimeout(5000);
         break;
       }
     } catch {}
   }
 
-  // ---------- Scroll to load listings ----------
+  // ---------- SCROLL ----------
   await smartScroll(page);
 
-  // ---------- FULLY UNIVERSAL SCRAPING LOGIC (Works on 99acres, Magicbricks, Housing.com, SquareYards, etc.) ----------
+  // ---------- WAIT FOR PRICE TEXT ----------
+  console.log("⏳ Waiting for listings to appear...");
+  await page.waitForFunction(() => {
+    return Array.from(document.querySelectorAll("body *")).some(el =>
+      /₹\s*\d|cr|lakh|bhk|bedroom|villa|house/i.test(el.innerText || "")
+    );
+  }, { timeout: 30000 });
+
+  await page.waitForTimeout(5000);
+
+  // ---------- SCRAPING ----------
   const data = await page.evaluate(() => {
     const results = [];
-    const seenLinks = new Set();
+    const seen = new Set();
 
-    // Very broad card detection: any container with price-like text
-    const potentialCards = Array.from(
-      document.querySelectorAll("div, section, article, li, .card, .listing, .property, .item, .result")
-    ).filter((el) => {
-      const text = (el.innerText || "").toLowerCase();
-      return /₹\d|cr|lakh|sq\.?\s*(ft|m|yd)|bhk|bedroom|plot|house|villa/i.test(text);
-    });
+    const cards = Array.from(
+      document.querySelectorAll("div, section, article, li")
+    ).filter(el =>
+      /₹\s*\d|cr|lakh|bhk|bedroom|villa|house/i.test(el.innerText || "")
+    );
 
-    console.log(`Found ${potentialCards.length} potential property cards.`);
-
-    for (const card of potentialCards) {
+    for (const card of cards) {
       if (results.length >= 4) break;
 
-      // Price
-      const priceMatch = card.innerText.match(/(₹\s*[\d.,]+(?:\s*(Cr|Lakh|Lac|K))?)/i);
-      const price = priceMatch ? priceMatch[0].trim() : null;
+      const text = card.innerText.replace(/\s+/g, " ");
 
-      // Title - pick first meaningful heading/link text
+      const priceMatch = text.match(/₹\s*[\d.,]+(?:\s*(Cr|Lakh|Lac))?/i);
+      const price = priceMatch ? priceMatch[0] : null;
+
       let title = null;
-      const titleEls = card.querySelectorAll("h1, h2, h3, h4, a, span, div");
-      for (const el of titleEls) {
-        let txt = el.innerText.trim().replace(/\n/g, " ").replace(/\s+/g, " ");
-        if (txt.length > 10 && txt.length < 200 && !/buy|post|free|results|home|filter|sort/i.test(txt.toLowerCase())) {
-          title = txt;
+      for (const el of card.querySelectorAll("h1,h2,h3,h4,a,span,div")) {
+        const t = el.innerText?.trim();
+        if (t && t.length > 15 && t.length < 150) {
+          title = t;
           break;
         }
       }
 
-      // Link - first good link in card
-      const linkEl = card.querySelector("a[href*='property'], a[href*='house'], a[href*='villa'], a[href*='plot'], a[href*='flat'], a");
-      let link = linkEl ? linkEl.href : null;
-      if (link && !link.startsWith("http")) link = new URL(link, window.location.origin).href;
-      // Skip obvious non-listing links
-      if (link && (link.includes("/search") || link.endsWith("/") || link.includes("/home"))) link = null;
-
-      // Description
-      let description = null;
-      const descEls = card.querySelectorAll("p, div, span");
-      for (const el of descEls) {
-        let txt = el.innerText.trim().replace(/\n/g, " ").replace(/\s+/g, " ");
-        if (txt.length > 30 && txt.length < 500) {
-          description = txt.substring(0, 250) + (txt.length > 250 ? "..." : "");
-          break;
-        }
+      let link = card.querySelector("a[href]")?.href;
+      if (link && !link.startsWith("http")) {
+        link = new URL(link, location.origin).href;
       }
 
-      if (!title || !price || !link || seenLinks.has(link)) continue;
+      if (!title || !price || !link || seen.has(link)) continue;
+      seen.add(link);
 
-      seenLinks.add(link);
-
-      results.push({ title, price, link, description });
+      results.push({ title, price, link });
     }
 
     return results;
   });
 
-  console.log(`\n📊 Extracted ${data.length} clean unique properties.\n`);
-  console.log("📦 Clean Extracted Data (JSON):");
+  // ---------- OUTPUT ----------
+  console.log(`\n📊 Extracted ${data.length} properties:\n`);
   console.log(JSON.stringify(data, null, 2));
 
   if (data.length === 0) {
-    console.log("\n⚠️ No properties found. Tips:");
-    console.log("   • Try queries like: 'independent house for sale ");
+    console.log("\n⚠️ No properties extracted.");
+    console.log("Try refining the search query.");
   }
 
   await browser.close();
