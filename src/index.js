@@ -22,18 +22,12 @@ const viewports = [
   { width: 1366, height: 768 },
   { width: 1440, height: 900 },
   { width: 1536, height: 864 },
-  { width: 1920, height: 1080 },
 ];
 
 const locales = ["en-US", "en-IN", "en-GB"];
 const timezones = ["Asia/Kolkata", "Asia/Dubai", "Europe/London"];
 
-// ---------- OPTIONAL PROXIES ----------
-const proxies = [
-  // Example format (replace with real proxies)
-  // { server: "http://ip:port", username: "user", password: "pass" }
-  null,
-];
+const proxies = [null];
 
 // ---------- CAPTCHA ----------
 async function waitIfCaptcha(page) {
@@ -47,77 +41,92 @@ async function waitIfCaptcha(page) {
   }
 }
 
-// ---------- THINKING PAUSE ----------
-async function thinkingPause() {
-  if (Math.random() < 0.25) {
-    const pause = Math.random() * 2500 + 1500;
-    console.log(`🤔 Thinking pause ${Math.round(pause)}ms`);
-    await new Promise(r => setTimeout(r, pause));
-  }
-}
+// ---------- GOOGLE SORRY ----------
+// async function handleGoogleSorry(page) {
+//   if (page.url().includes("/sorry")) {
+//     console.log("⚠️ Google CAPTCHA page detected");
+//     console.log("👉 Solve it manually...");
+//     await page.waitForTimeout(30000);
 
-// ---------- HUMAN TYPING ----------
+//     await page.waitForFunction(
+//       () => !location.href.includes("/sorry"),
+//       { timeout: 60000 }
+//     );
+//   }
+// }
+
+// ---------- HUMAN TYPE ----------
 async function humanType(page, selector, text) {
-  const box = await page.locator(selector);
-  const bb = await box.boundingBox();
+  const input = page.locator(selector);
+  await input.focus();
 
-  for (const char of text) {
-    // Move mouse slightly while typing
-    await page.mouse.move(
-      bb.x + Math.random() * bb.width,
-      bb.y + Math.random() * bb.height,
-      { steps: 4 }
-    );
+  let typed = "";
 
-    // 🧠 RANDOM TYPING ERROR (1–3 wrong letters)
-    if (Math.random() < 0.12) { // ~12% chance
-      const errorLength = Math.floor(Math.random() * 3) + 1; // 1–3 chars
-      let wrongChars = "";
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
 
-      for (let i = 0; i < errorLength; i++) {
-        const randChar = String.fromCharCode(97 + Math.floor(Math.random() * 26));
-        wrongChars += randChar;
-        await page.keyboard.type(randChar, { delay: 80 + Math.random() * 80 });
+    if (Math.random() < 0.04) {
+      await page.keyboard.press("Tab");
+      await page.waitForTimeout(900 + Math.random() * 1500);
+      await page.keyboard.press("Shift+Tab");
+    }
+
+    if (Math.random() < 0.08 && /[a-z]/i.test(char)) {
+      await page.keyboard.type(char + char);
+      typed += char + char;
+
+      const noiseCount = Math.floor(Math.random() * 2) + 1;
+      for (let n = 0; n < noiseCount; n++) {
+        const r = String.fromCharCode(97 + Math.floor(Math.random() * 26));
+        await page.keyboard.type(r);
+        typed += r;
       }
 
-      // Pause like "oh wait that's wrong"
-      await page.waitForTimeout(400 + Math.random() * 600);
-
-      // Correct the mistake using backspace
-      for (let i = 0; i < wrongChars.length; i++) {
+      await page.waitForTimeout(800);
+      for (let k = 0; k < noiseCount + 1; k++) {
         await page.keyboard.press("Backspace");
-        await page.waitForTimeout(120 + Math.random() * 120);
+        typed = typed.slice(0, -1);
+        await page.waitForTimeout(120);
       }
     }
 
-    // Type the correct character
-    await page.keyboard.type(char, {
-      delay: Math.random() * 180 + 60,
-    });
-
-    // Pause longer after space (thinking)
-    if (char === " ") {
-      await page.waitForTimeout(2000);
+    if (Math.random() < 0.08) {
+      const wrong = String.fromCharCode(97 + Math.floor(Math.random() * 26));
+      await page.keyboard.type(wrong);
+      typed += wrong;
+      await page.waitForTimeout(850);
+      await page.keyboard.press("Backspace");
+      typed = typed.slice(0, -1);
     }
 
-    // Random thinking pause mid-typing
-    if (Math.random() < 0.25) {
-      await page.waitForTimeout(Math.random() * 2500 + 1500);
-    }
+    await page.keyboard.type(char, { delay: Math.random() * 150 + 60 });
+    typed += char;
+
+    if (char === " ") await page.waitForTimeout(2800);
+    if (Math.random() < 0.2)
+      await page.waitForTimeout(2500 + Math.random() * 4000);
   }
 
-  // Final pause before Enter
-  await page.waitForTimeout(4000);
+  const finalValue = await input.inputValue();
+  if (finalValue !== text) {
+    console.log("🔧 Fixing final query");
+    await page.keyboard.press("Control+A");
+    await page.keyboard.press("Backspace");
+    await page.keyboard.type(text, { delay: 400 });
+  }
+console.log("error:" ,finalValue)
+  await page.waitForTimeout(8000);
 }
 
 // ---------- SCROLL ----------
 async function smartScroll(page) {
-  for (let i = 0; i < 40; i++) {
-    await page.mouse.wheel(0, Math.random() * 800 + 400);
+  for (let i = 0; i < 30; i++) {
+    await page.mouse.wheel(0, Math.random() * 100 + 400);
     await page.waitForTimeout(Math.random() * 2000 + 1000);
   }
 }
 
+// ================= MAIN =================
 (async () => {
   const searchText = await askQuestion("What would you want to search? 👉 ");
   rl.close();
@@ -139,9 +148,22 @@ async function smartScroll(page) {
     viewport,
     locale,
     timezoneId,
-    deviceScaleFactor: Math.random() > 0.5 ? 1 : 1.25,
-    hasTouch: false,
-    isMobile: false,
+  });
+
+  // 🔥 HARD RESET — CLEAR ALL PREVIOUS DATA
+  await context.clearCookies();
+  console.log("idhr",clearCookies)
+  await context.clearPermissions();
+
+  await context.addInitScript(() => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      indexedDB.databases().then(dbs => {
+        dbs.forEach(db => indexedDB.deleteDatabase(db.name));
+      });
+    } catch (e) {}
+    console.log("ho raha hai")
   });
 
   const page = await context.newPage();
@@ -152,27 +174,32 @@ async function smartScroll(page) {
   await waitIfCaptcha(page);
 
   try {
-    await page.click("button:has-text('Accept all'), button:has-text('I agree')", { timeout: 5000 });
+    await page.click(
+      "button:has-text('Accept all'), button:has-text('I agree')",
+      { timeout: 5000 }
+    );
   } catch {}
 
   const searchSelector = "textarea[name='q'], input[name='q']";
   await page.waitForSelector(searchSelector);
   await page.click(searchSelector);
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(2200);
 
-  console.log("⌨️ Human typing with mistakes...");
+  console.log("⌨️ Human typing...");
   await humanType(page, searchSelector, searchText);
 
-  console.log("↵ Enter pressed");
   await page.keyboard.press("Enter");
 
+  await handleGoogleSorry(page);
   await waitIfCaptcha(page);
-  await page.waitForSelector("div#search a h3", { timeout: 20000 });
+
+  await page.waitForSelector("div#search a h3", { timeout: 30000 });
 
   const firstResult = page.locator("div#search a:has(h3)").first();
   const targetUrl = await firstResult.getAttribute("href");
 
   console.log("🔗 Opening:", targetUrl);
+
   await Promise.all([
     page.waitForNavigation({ waitUntil: "domcontentloaded" }),
     firstResult.click(),
@@ -207,5 +234,6 @@ async function smartScroll(page) {
   });
 
   console.log("\n📊 Extracted Data:\n", JSON.stringify(data, null, 2));
+
   await browser.close();
 })();
