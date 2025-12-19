@@ -48,6 +48,33 @@ async function smartScroll(page) {
   }
 }
 
+// ---------- HUMAN TYPING WITH MOUSE ----------
+async function humanType(page, selector, text) {
+  const box = await page.locator(selector);
+  const boundingBox = await box.boundingBox();
+
+  for (const char of text) {
+    // Random mouse move near search box
+    await page.mouse.move(
+      boundingBox.x + Math.random() * boundingBox.width,
+      boundingBox.y + Math.random() * boundingBox.height,
+      { steps: 5 }
+    );
+
+    await page.keyboard.type(char, {
+      delay: Math.random() * 150 + 50, // random typing speed
+    });
+
+    // Pause 2 seconds after space
+    if (char === " ") {
+      await page.waitForTimeout(2000);
+    }
+  }
+
+  // Wait 4 seconds after full typing
+  await page.waitForTimeout(4000);
+}
+
 (async () => {
   const searchText = await askQuestion("What would you want to search? 👉 ");
   rl.close();
@@ -66,15 +93,30 @@ async function smartScroll(page) {
 
   // ---------- GOOGLE SEARCH ----------
   console.log("\n🔍 Opening Google...");
-  await page.goto("https://www.google.com", { waitUntil: "domcontentloaded" });
+  await page.goto("https://www.google.com", {
+    waitUntil: "domcontentloaded",
+  });
+
   await waitIfCaptcha(page);
 
   try {
-    await page.click("button:has-text('Accept all'), button:has-text('I agree')", { timeout: 5000 });
+    await page.click(
+      "button:has-text('Accept all'), button:has-text('I agree')",
+      { timeout: 5000 }
+    );
   } catch {}
 
-  const searchBox = page.locator("textarea[name='q'], input[name='q']");
-  await searchBox.fill(searchText);
+  const searchBoxSelector = "textarea[name='q'], input[name='q']";
+  await page.waitForSelector(searchBoxSelector);
+
+  // Click search box like human
+  await page.click(searchBoxSelector);
+  await page.waitForTimeout(1000);
+
+  console.log("⌨️ Typing search slowly like a human...");
+  await humanType(page, searchBoxSelector, searchText);
+
+  console.log("↵ Pressing Enter...");
   await page.keyboard.press("Enter");
 
   await waitIfCaptcha(page);
@@ -100,18 +142,18 @@ async function smartScroll(page) {
   await page.waitForTimeout(8000);
 
   // ---------- OPTIONAL SALE TAB ----------
-  const saleTabs = ["Buy", "For Sale", "Sale", "Properties"];
-  for (const tab of saleTabs) {
-    try {
-      const el = page.locator(`text=${tab}`).first();
-      if (await el.isVisible({ timeout: 3000 })) {
-        await el.click();
-        console.log(`✅ Clicked "${tab}" tab`);
-        await page.waitForTimeout(5000);
-        break;
-      }
-    } catch {}
-  }
+  // const saleTabs = ["Buy", "For Sale", "Sale", "Properties"];
+  // for (const tab of saleTabs) {
+  //   try {
+  //     const el = page.locator(`text=${tab}`).first();
+  //     if (await el.isVisible({ timeout: 3000 })) {
+  //       await el.click();
+  //       console.log(`✅ Clicked "${tab}" tab`);
+  //       await page.waitForTimeout(5000);
+  //       break;
+  //     }
+  //   } catch {}
+  // }
 
   // ---------- SCROLL ----------
   await smartScroll(page);
@@ -119,7 +161,7 @@ async function smartScroll(page) {
   // ---------- WAIT FOR PRICE TEXT ----------
   console.log("⏳ Waiting for listings to appear...");
   await page.waitForFunction(() => {
-    return Array.from(document.querySelectorAll("body *")).some(el =>
+    return Array.from(document.querySelectorAll("body *")).some((el) =>
       /₹\s*\d|cr|lakh|bhk|bedroom|villa|house/i.test(el.innerText || "")
     );
   }, { timeout: 30000 });
@@ -133,7 +175,7 @@ async function smartScroll(page) {
 
     const cards = Array.from(
       document.querySelectorAll("div, section, article, li")
-    ).filter(el =>
+    ).filter((el) =>
       /₹\s*\d|cr|lakh|bhk|bedroom|villa|house/i.test(el.innerText || "")
     );
 
