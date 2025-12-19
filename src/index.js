@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import readline from "readline";
+import fs from "fs";
 
 // ---------- USER INPUT ----------
 const rl = readline.createInterface({
@@ -27,7 +28,6 @@ const viewports = [
 const locales = ["en-US", "en-IN", "en-GB"];
 const timezones = ["Asia/Kolkata", "Asia/Dubai", "Europe/London"];
 
-const proxies = [null];
 
 // ---------- CAPTCHA DETECTOR (NEW) ----------
 async function isCaptchaPresent(page) {
@@ -205,5 +205,13 @@ async function smartScroll(page) {
   });
 
   console.log("\n📊 Extracted Data:\n", JSON.stringify(data, null, 2));
+
+  fs.writeFileSync(
+  "output.json",
+  JSON.stringify(data, null, 2),
+  "utf-8"
+);
+
+console.log("✅ Data successfully saved to output.json");
   await browser.close();
 })();
