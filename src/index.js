@@ -29,7 +29,14 @@ const timezones = ["Asia/Kolkata", "Asia/Dubai", "Europe/London"];
 
 const proxies = [null];
 
-// ---------- CAPTCHA ----------
+// ---------- CAPTCHA DETECTOR (NEW) ----------
+async function isCaptchaPresent(page) {
+  const iframeCount = await page.locator('iframe[src*="recaptcha"]').count();
+  const textCount = await page.locator('text=/unusual traffic/i').count();
+  return iframeCount > 0 || textCount > 0;
+}
+
+// ---------- CAPTCHA WAITER (EXISTING) ----------
 async function waitIfCaptcha(page) {
   const captchaTexts = ["unusual traffic", "verify you are human", "captcha"];
   for (const text of captchaTexts) {
@@ -41,81 +48,33 @@ async function waitIfCaptcha(page) {
   }
 }
 
-// ---------- GOOGLE SORRY ----------
-// async function handleGoogleSorry(page) {
-//   if (page.url().includes("/sorry")) {
-//     console.log("⚠️ Google CAPTCHA page detected");
-//     console.log("👉 Solve it manually...");
-//     await page.waitForTimeout(30000);
-
-//     await page.waitForFunction(
-//       () => !location.href.includes("/sorry"),
-//       { timeout: 60000 }
-//     );
-//   }
-// }
-
 // ---------- HUMAN TYPE ----------
 async function humanType(page, selector, text) {
   const input = page.locator(selector);
   await input.focus();
 
-  let typed = "";
-
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-
-    if (Math.random() < 0.04) {
-      await page.keyboard.press("Tab");
-      await page.waitForTimeout(900 + Math.random() * 1500);
-      await page.keyboard.press("Shift+Tab");
-    }
-
-    if (Math.random() < 0.08 && /[a-z]/i.test(char)) {
-      await page.keyboard.type(char + char);
-      typed += char + char;
-
-      const noiseCount = Math.floor(Math.random() * 2) + 1;
-      for (let n = 0; n < noiseCount; n++) {
-        const r = String.fromCharCode(97 + Math.floor(Math.random() * 26));
-        await page.keyboard.type(r);
-        typed += r;
-      }
-
-      await page.waitForTimeout(800);
-      for (let k = 0; k < noiseCount + 1; k++) {
-        await page.keyboard.press("Backspace");
-        typed = typed.slice(0, -1);
-        await page.waitForTimeout(120);
-      }
-    }
-
+  for (const char of text) {
     if (Math.random() < 0.08) {
-      const wrong = String.fromCharCode(97 + Math.floor(Math.random() * 26));
-      await page.keyboard.type(wrong);
-      typed += wrong;
-      await page.waitForTimeout(850);
+      await page.keyboard.type(
+        String.fromCharCode(97 + Math.floor(Math.random() * 26))
+      );
+      await page.waitForTimeout(400);
       await page.keyboard.press("Backspace");
-      typed = typed.slice(0, -1);
     }
 
-    await page.keyboard.type(char, { delay: Math.random() * 150 + 60 });
-    typed += char;
+    await page.keyboard.type(char, {
+      delay: Math.random() * 150 + 60,
+    });
 
-    if (char === " ") await page.waitForTimeout(2800);
-    if (Math.random() < 0.2)
-      await page.waitForTimeout(2500 + Math.random() * 4000);
+    if (char === " ") await page.waitForTimeout(1200);
   }
 
   const finalValue = await input.inputValue();
   if (finalValue !== text) {
-    console.log("🔧 Fixing final query");
     await page.keyboard.press("Control+A");
     await page.keyboard.press("Backspace");
-    await page.keyboard.type(text, { delay: 400 });
+    await page.keyboard.type(text, { delay: 200 });
   }
-console.log("error:" ,finalValue)
-  await page.waitForTimeout(8000);
 }
 
 // ---------- SCROLL ----------
@@ -131,7 +90,6 @@ async function smartScroll(page) {
   const searchText = await askQuestion("What would you want to search? 👉 ");
   rl.close();
 
-  const proxy = proxies[Math.floor(Math.random() * proxies.length)];
   const ua = userAgents[Math.floor(Math.random() * userAgents.length)];
   const viewport = viewports[Math.floor(Math.random() * viewports.length)];
   const locale = locales[Math.floor(Math.random() * locales.length)];
@@ -140,7 +98,7 @@ async function smartScroll(page) {
   const browser = await chromium.launch({
     headless: false,
     slowMo: 60,
-    proxy: proxy || undefined,
+    args: ["--disable-blink-features=AutomationControlled"],
   });
 
   const context = await browser.newContext({
@@ -150,26 +108,34 @@ async function smartScroll(page) {
     timezoneId,
   });
 
-  // 🔥 HARD RESET — CLEAR ALL PREVIOUS DATA
+  // 🔥 HARD RESET
   await context.clearCookies();
-  console.log("idhr",clearCookies)
   await context.clearPermissions();
 
   await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => undefined,
+    });
+
     try {
       localStorage.clear();
       sessionStorage.clear();
       indexedDB.databases().then(dbs => {
         dbs.forEach(db => indexedDB.deleteDatabase(db.name));
       });
-    } catch (e) {}
-    console.log("ho raha hai")
+    } catch {}
   });
 
   const page = await context.newPage();
 
   console.log("🔍 Opening Google...");
   await page.goto("https://www.google.com", { waitUntil: "domcontentloaded" });
+
+  // ✅ NEW CHECK (does not replace old one)
+  if (await isCaptchaPresent(page)) {
+    console.log("⚠️ CAPTCHA detected early — solve manually");
+    await page.waitForTimeout(30000);
+  }
 
   await waitIfCaptcha(page);
 
@@ -183,14 +149,17 @@ async function smartScroll(page) {
   const searchSelector = "textarea[name='q'], input[name='q']";
   await page.waitForSelector(searchSelector);
   await page.click(searchSelector);
-  await page.waitForTimeout(2200);
 
   console.log("⌨️ Human typing...");
   await humanType(page, searchSelector, searchText);
 
   await page.keyboard.press("Enter");
 
-  await handleGoogleSorry(page);
+  if (await isCaptchaPresent(page)) {
+    console.log("⚠️ CAPTCHA after search — solve manually");
+    await page.waitForTimeout(30000);
+  }
+
   await waitIfCaptcha(page);
 
   await page.waitForSelector("div#search a h3", { timeout: 30000 });
@@ -205,8 +174,10 @@ async function smartScroll(page) {
     firstResult.click(),
   ]);
 
-  await waitIfCaptcha(page);
-  await page.waitForTimeout(8000);
+  if (await isCaptchaPresent(page)) {
+    console.log("⚠️ CAPTCHA on target site — solve manually");
+    await page.waitForTimeout(30000);
+  }
 
   await smartScroll(page);
 
@@ -234,6 +205,5 @@ async function smartScroll(page) {
   });
 
   console.log("\n📊 Extracted Data:\n", JSON.stringify(data, null, 2));
-
   await browser.close();
 })();
